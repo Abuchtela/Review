@@ -1,0 +1,45 @@
+{
+  "contract": {
+    "name": "l2crossdom",
+    "address": "0x0",
+    "network": "optimism"
+  },
+  "analysis": {
+    "timestamp": "2025-04-01T04:30:29.561Z",
+    "vulnerabilities": [
+      {
+        "level": "critical",
+        "title": "Cross-Layer Reentrancy",
+        "description": "Message passing between L1 and L2 can create complex reentrancy vulnerabilities specific to Optimism's architecture. Cross-domain messages can be manipulated to reenter contracts in ways that regular reentrancy guards might not catch.",
+        "recommendation": "Implement cross-layer specific reentrancy guards, use the checks-effects-interactions pattern and ensure xDomainMessageSender is validated before executing sensitive operations.",
+        "lineNumbers": [
+          12,
+          14,
+          18,
+          30,
+          91
+        ]
+      },
+      {
+        "level": "high",
+        "title": "Cross-Domain Messenger Replay Risk",
+        "description": "Messages relayed across domains might be vulnerable to replay attacks if not properly protected.",
+        "recommendation": "Ensure proper nonce management and message validation in cross-domain messaging.",
+        "lineNumbers": [
+          12,
+          14,
+          18,
+          30,
+          93,
+          99
+        ]
+      },
+      {
+        "level": "medium",
+        "title": "Cross-Domain Gas Limit Specification",
+        "description": "Messages sent between L1 and L2 should specify appropriate gas limits.",
+        "recommendation": "Always specify explicit and appropriate gas limits for cross-domain messages."
+      }
+    ]
+  }
+}
