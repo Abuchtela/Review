@@ -105,7 +105,7 @@ const VulnerabilityCard = ({ vulnerability }: { vulnerability: Vulnerability }) 
 
   return (
     <Link href={`/vulnerability/${vulnerability.id}`}>
-      <a className={`block border ${borderColor} rounded-lg overflow-hidden hover:shadow-md transition-shadow`}>
+      <div className={`block border ${borderColor} rounded-lg overflow-hidden hover:shadow-md transition-shadow cursor-pointer`}>
         <Card className="bg-transparent border-0">
           <CardContent className="p-4">
             <div className="flex items-center mb-2">
@@ -119,7 +119,7 @@ const VulnerabilityCard = ({ vulnerability }: { vulnerability: Vulnerability }) 
             </div>
           </CardContent>
         </Card>
-      </a>
+      </div>
     </Link>
   );
 };

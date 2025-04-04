@@ -80,6 +80,70 @@ export class MemStorage implements IStorage {
         description: "A critical vulnerability in Optimism's withdrawal system where the OptimismPortal doesn't properly verify withdrawal proofs.",
         attackVector: ["Fraudulent withdrawals"],
         affectedContracts: ["OptimismPortal"]
+      },
+      {
+        id: "incorrect-dispute-game-resolution",
+        title: "Incorrect Dispute Game Resolution",
+        severity: "high",
+        description: "Fault dispute games can be incorrectly resolved due to improper handling of edge cases in game depth calculations.",
+        attackVector: ["Edge case manipulation"],
+        affectedContracts: ["FaultDisputeGame"]
+      },
+      {
+        id: "permanent-fund-freezing",
+        title: "Permanent Fund Freezing",
+        severity: "high",
+        description: "Funds can be permanently locked in the OptimismPortal due to missing recovery mechanisms.",
+        attackVector: ["Contract locking attack"],
+        affectedContracts: ["OptimismPortal"]
+      },
+      {
+        id: "ecrecover-malleability",
+        title: "ECRecover Signature Malleability",
+        severity: "high",
+        description: "Signature replay vulnerabilities due to ECDSA signature malleability in cross-domain transactions.",
+        attackVector: ["Signature manipulation"],
+        affectedContracts: ["L1CrossDomainMessenger", "L2CrossDomainMessenger"]
+      },
+      {
+        id: "protocol-insolvency",
+        title: "Protocol Insolvency Risk",
+        severity: "critical",
+        description: "Withdrawal mechanisms fail to validate the protocol has sufficient funds to cover withdrawals.",
+        attackVector: ["Excessive withdrawals"],
+        affectedContracts: ["L2ToL1MessagePasser"]
+      },
+      {
+        id: "unenforceable-timeouts",
+        title: "Unenforceable Challenge Timeouts",
+        severity: "medium",
+        description: "Challenge timeouts can be avoided due to a flaw in the timeout enforcement mechanism.",
+        attackVector: ["Challenge timeout avoidance"],
+        affectedContracts: ["FaultDisputeGame"]
+      },
+      {
+        id: "invalid-target-handling",
+        title: "Invalid Target Handling",
+        severity: "medium",
+        description: "Improper validation of message target addresses in cross-domain messaging.",
+        attackVector: ["Invalid address targeting"],
+        affectedContracts: ["L1CrossDomainMessenger", "L2CrossDomainMessenger"]
+      },
+      {
+        id: "transaction-sequencing-attack",
+        title: "Transaction Sequencing Attack",
+        severity: "high",
+        description: "Transaction ordering can be manipulated to gain privileged information or extract value.",
+        attackVector: ["MEV-style attack"],
+        affectedContracts: ["SequencerInbox"]
+      },
+      {
+        id: "excessive-gas-usage",
+        title: "Excessive Gas Usage Attack",
+        severity: "medium",
+        description: "Cross-domain messages can be crafted to consume excessive gas, potentially causing denial of service.",
+        attackVector: ["Gas exhaustion"],
+        affectedContracts: ["L1CrossDomainMessenger", "L2CrossDomainMessenger"]
       }
     ].forEach(vuln => {
       this.vulnerabilities.set(vuln.id, vuln as Vulnerability);
