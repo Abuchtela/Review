@@ -20,6 +20,41 @@ contract OptimismPortalMock {
 }
 
 /**
+ * @title CrossL2Inbox
+ * @notice Base contract for cross-layer messaging with shared functionality
+ */
+contract CrossL2Inbox {
+    mapping(bytes32 => bool) public initiatedMessages;
+    
+    event MessageInitiated(bytes32 indexed messageHash, address sender, address target);
+    
+    function verifyMessage(
+        address _sender,
+        address _target,
+        bytes calldata _message,
+        uint256 _nonce
+    ) internal view returns (bool) {
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(_sender, _target, _message, _nonce)
+        );
+        return initiatedMessages[messageHash];
+    }
+    
+    // VULNERABLE: Missing proper validation in dispute resolution
+    function resolveDispute(bytes32 _messageHash) public {
+        require(!initiatedMessages[_messageHash], "Dispute already resolved");
+        initiatedMessages[_messageHash] = true;
+        // Dispute resolution logic...
+    }
+    
+    // VULNERABLE: No access control or reentrancy guard
+    function withdraw(address _to, uint256 _amount) external {
+        // Direct theft vulnerability
+        payable(_to).transfer(_amount);
+    }
+}
+
+/**
  * @title VulnerableL1CrossDomainMessenger
  * @notice Simplified version of cross-domain messenger with reentrancy vulnerability
  */
@@ -238,6 +273,29 @@ contract ReentrancyAttacker {
     
     // To receive ETH
     receive() external payable {}
+}
+
+/**
+ * @title FaultDisputeGame
+ * @notice Smart contract to simulate Optimism's dispute game vulnerability
+ */
+contract FaultDisputeGame {
+    uint256 public constant MAX_GAME_DEPTH = 10;
+
+    function step(uint256 _gameDepth) external {
+        require(_gameDepth < MAX_GAME_DEPTH, "Invalid game depth");
+        // Vulnerability: No checks at MAX_GAME_DEPTH or MAX_GAME_DEPTH-2
+    }
+
+    function attack(uint256 _gameDepth) external {
+        require(_gameDepth < MAX_GAME_DEPTH, "Invalid attack depth");
+        // Vulnerability: No checks at MAX_GAME_DEPTH-2
+    }
+
+    function defend(uint256 _gameDepth) external {
+        require(_gameDepth < MAX_GAME_DEPTH, "Invalid defend depth");
+        // Vulnerability: No checks at MAX_GAME_DEPTH-2
+    }
 }
 
 interface IOptimismPortal {

